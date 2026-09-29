@@ -1,5 +1,6 @@
 import os
 import random
+from pathlib import Path
 
 import matplotlib.pyplot as plt
 import torch
@@ -23,15 +24,16 @@ def _extract_tensors(dset, num=None, x_dtype=torch.float32):
     - x: `x_dtype` tensor of shape (N, 3, 32, 32)
     - y: int64 tensor of shape (N,)
     """
-    x = torch.tensor(dset.data, dtype=x_dtype).permute(0, 3, 1, 2).div_(255)
-    y = torch.tensor(dset.targets, dtype=torch.int64)
+    total = len(dset.targets)
     if num is not None:
-        if num <= 0 or num > x.shape[0]:
+        if num <= 0 or num > total:
             raise ValueError(
-                "Invalid value num=%d; must be in the range [0, %d]" % (num, x.shape[0])
+                "Invalid value num=%d; must be in the range [1, %d]" % (num, total)
             )
-        x = x[:num].clone()
-        y = y[:num].clone()
+    images = dset.data if num is None else dset.data[:num]
+    labels = dset.targets if num is None else dset.targets[:num]
+    x = torch.tensor(images, dtype=x_dtype).permute(0, 3, 1, 2).div_(255)
+    y = torch.tensor(labels, dtype=torch.int64)
     return x, y
 
 
@@ -53,9 +55,11 @@ def cifar10(num_train=None, num_test=None, x_dtype=torch.float32):
     - x_test: `x_dtype` tensor of shape (num_test, 3, 32, 32)
     - y_test: int64 tensor of shape (num_test,)
     """
-    download = not os.path.isdir("cifar-10-batches-py")
-    dset_train = CIFAR10(root=".", download=download, train=True)
-    dset_test = CIFAR10(root=".", train=False)
+    root = os.environ.get(
+        "DLCV_DATA_DIR", str(Path(__file__).resolve().parent.parent / "data")
+    )
+    dset_train = CIFAR10(root=root, download=True, train=True)
+    dset_test = CIFAR10(root=root, download=True, train=False)
     x_train, y_train = _extract_tensors(dset_train, num_train, x_dtype)
     x_test, y_test = _extract_tensors(dset_test, num_test, x_dtype)
 
@@ -173,3 +177,4 @@ def preprocess_cifar10(
     data_dict["X_test"] = X_test
     data_dict["y_test"] = y_test
     return data_dict
+

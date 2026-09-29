@@ -65,3 +65,4 @@ def visualize_dataset(X_data, y_data, samples_per_class, class_list):
 
     img = make_grid(samples, nrow=samples_per_class)
     return tensor_to_image(img)
+

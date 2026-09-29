@@ -51,11 +51,9 @@ def compute_distances_two_loops(x_train: torch.Tensor, x_test: torch.Tensor):
     num_train = x_train.shape[0]
     num_test = x_test.shape[0]
     dists = x_train.new_zeros(num_train, num_test)
-    train_flat = x_train.reshape(num_train, -1)
-    test_flat = x_test.reshape(num_test, -1)
     for i in range(num_train):
         for j in range(num_test):
-            diff = train_flat[i] - test_flat[j]
+            diff = x_train[i].reshape(-1) - x_test[j].reshape(-1)
             dists[i, j] = (diff * diff).sum()
     return dists
 
@@ -88,10 +86,10 @@ def compute_distances_one_loop(x_train: torch.Tensor, x_test: torch.Tensor):
     num_train = x_train.shape[0]
     num_test = x_test.shape[0]
     dists = x_train.new_zeros(num_train, num_test)
-    train_flat = x_train.reshape(num_train, -1)
-    test_flat = x_test.reshape(num_test, -1)
+    train_flat = x_train.flatten(start_dim=1)
+    test_flat = x_test.flatten(start_dim=1)
     for i in range(num_train):
-        diff = test_flat - train_flat[i].reshape(1, -1)
+        diff = test_flat - train_flat[i]
         dists[i] = (diff * diff).sum(dim=1)
     return dists
 
@@ -124,20 +122,16 @@ def compute_distances_no_loops(x_train: torch.Tensor, x_test: torch.Tensor):
             the squared Euclidean distance between the i-th training point and
             the j-th test point.
     """
-    num_train = x_train.shape[0]
-    num_test = x_test.shape[0]
-    dists = x_train.new_zeros(num_train, num_test)
-
-    train_flat = x_train.reshape(num_train, -1)
-    test_flat = x_test.reshape(num_test, -1)
-
-    # ||a - b||^2 = ||a||^2 + ||b||^2 - 2 a.b
-    train_sq = (train_flat * train_flat).sum(dim=1, keepdim=True)  # (num_train, 1)
-    test_sq = (test_flat * test_flat).sum(dim=1).unsqueeze(0)  # (1, num_test)
-    cross = train_flat.mm(test_flat.t())  # (num_train, num_test)
-
-    dists = train_sq + test_sq - 2 * cross
-    dists = dists.clamp(min=0)
+    train_flat = x_train.flatten(start_dim=1)
+    test_flat = x_test.flatten(start_dim=1)
+    train_sq = (train_flat * train_flat).sum(dim=1, keepdim=True)
+    test_sq = (test_flat * test_flat).sum(dim=1).unsqueeze(0)
+    # Reuse the output matrix to avoid additional pairwise-sized temporaries.
+    dists = train_flat.mm(test_flat.t())
+    dists.mul_(-2)
+    dists.add_(train_sq)
+    dists.add_(test_sq)
+    dists.clamp_(min=0)
     return dists
 
 
@@ -169,7 +163,9 @@ def predict_labels(dists: torch.Tensor, y_train: torch.Tensor, k: int = 1):
             [0, num_classes - 1].
     """
     num_train, num_test = dists.shape
-    y_pred = torch.zeros(num_test, dtype=torch.int64)
+    if not 1 <= k <= num_train:
+        raise ValueError("k must be between 1 and the number of training examples")
+    y_pred = torch.zeros(num_test, dtype=torch.int64, device=y_train.device)
 
     # smallest distances -> nearest neighbors, so use largest=False
     _, nearest_idx = dists.topk(k, dim=0, largest=False)  # (k, num_test)

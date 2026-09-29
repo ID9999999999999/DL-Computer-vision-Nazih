@@ -1,0 +1,7 @@
+__pycache__/
+*.py[cod]
+.ipynb_checkpoints/
+.venv/
+data/
+cifar-10-batches-py/
+cifar-10-python.tar.gz
