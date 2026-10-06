@@ -8,7 +8,7 @@ Install the dependencies in your Python environment:
 python -m pip install -r requirements.txt
 ```
 
-Open the notebook in Jupyter or VS Code, select that Python environment, and
+Open the noteboo in Jupyter or VS Code, select that Python environment, and
 run all cells from the beginning. Keep the repository folder structure intact:
 the notebooks import their local implementation and the shared `dlcv2026`
 package. Save the notebook after running it so the results remain visible.
