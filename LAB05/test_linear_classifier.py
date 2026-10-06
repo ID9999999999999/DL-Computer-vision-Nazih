@@ -54,8 +54,60 @@ class SVMTests(unittest.TestCase):
         torch.testing.assert_close(gradient, 0.2 * W)
 
     def test_empty_batch_rejected(self):
-        with self.assertRaises(ValueError):
-            lc.svm_loss_vectorized(torch.zeros(2, 3), torch.empty(0, 2), torch.empty(0, dtype=torch.long))
+        for loss_fn in (lc.svm_loss_naive, lc.svm_loss_vectorized):
+            with self.subTest(function=loss_fn.__name__), self.assertRaises(ValueError):
+                loss_fn(torch.zeros(2, 3), torch.empty(0, 2), torch.empty(0, dtype=torch.long))
+
+    def test_invalid_labels_rejected(self):
+        X = torch.ones(2, 2)
+        W = torch.zeros(2, 3)
+        for y in (torch.tensor([-1, 0]), torch.tensor([0, 3]),
+                  torch.tensor([False, True]), torch.tensor([0.0, 1.0])):
+            for loss_fn in (lc.svm_loss_naive, lc.svm_loss_vectorized):
+                with self.subTest(y=y, function=loss_fn.__name__), self.assertRaises(ValueError):
+                    loss_fn(W, X, y)
+
+    def test_training_copies_initial_weights(self):
+        X = torch.tensor([[1.0, 0.0], [0.0, 1.0]])
+        y = torch.tensor([0, 1])
+        initial = torch.zeros(2, 2, requires_grad=True)
+        before = initial.detach().clone()
+        trained, history = lc.train_linear_classifier(
+            lc.svm_loss_vectorized, X, y, W=initial, num_iters=3
+        )
+        torch.testing.assert_close(initial.detach(), before, rtol=0, atol=0)
+        self.assertFalse(trained.requires_grad)
+        self.assertFalse(torch.equal(trained, before))
+        self.assertEqual(len(history), 3)
+
+    def test_empty_helpers_rejected(self):
+        X, y = torch.empty(0, 2), torch.empty(0, dtype=torch.long)
+        for operation in (
+            lambda: lc.sample_batch(X, y, 2),
+            lambda: lc.train_linear_classifier(lc.svm_loss_vectorized, X, y),
+            lambda: lc.accuracy(y, y),
+        ):
+            with self.assertRaises(ValueError):
+                operation()
+
+    def test_invalid_training_parameters(self):
+        X, y = torch.ones(2, 2), torch.tensor([0, 1])
+        for params in ({'num_iters': -1}, {'batch_size': 0},
+                       {'learning_rate': 0}, {'reg': -0.1}, {'reg': float('nan')}):
+            with self.subTest(params=params), self.assertRaises(ValueError):
+                lc.train_linear_classifier(lc.svm_loss_vectorized, X, y, **params)
+
+    def test_gradient_check_restores_weights_on_failure(self):
+        from dlcv2026 import grad_check_sparse
+        W = torch.ones(2, 2, dtype=torch.float64)
+        before = W.clone()
+
+        def failing_objective(weights):
+            raise RuntimeError("Failed objective")
+
+        with self.assertRaisesRegex(RuntimeError, "Failed objective"):
+            grad_check_sparse(failing_objective, W, torch.zeros_like(W))
+        torch.testing.assert_close(W, before, rtol=0, atol=0)
 
     def test_training_reproducibility(self):
         from dlcv2026 import make_toy_classification

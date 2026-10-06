@@ -1,7 +1,4 @@
-"""Execute every notebook code cell in order and save its actual outputs.
-
-Uses an in-process IPython shell, so no Jupyter socket server is required.
-"""
+"""Execute the notebook with IPython and save outputs on success."""
 from __future__ import annotations
 
 import os
@@ -50,7 +47,9 @@ def main() -> None:
         count += 1
         print(captured.stdout, end='')
     nbformat.validate(notebook)
-    nbformat.write(notebook, path)
+    temporary = path.with_suffix(".ipynb.tmp")
+    nbformat.write(notebook, temporary)
+    temporary.replace(path)
     print(f'\nExecuted and saved {count} code cells successfully.')
 
 

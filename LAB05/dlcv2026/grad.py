@@ -1,4 +1,4 @@
-"""Numerical-gradient utilities supplied to students."""
+"""Finite-difference gradient checks."""
 
 from __future__ import annotations
 
@@ -26,6 +26,10 @@ def grad_check_sparse(
     """Compare sampled analytic-gradient entries with finite differences."""
     if x.shape != analytic_grad.shape:
         raise ValueError("x and analytic_grad must have the same shape")
+    if not x.is_floating_point() or x.numel() == 0:
+        raise ValueError("x must be a nonempty floating-point tensor")
+    if h <= 0 or num_checks <= 0:
+        raise ValueError("h and num_checks must be positive")
 
     rng = random.Random(seed)
     errors: List[float] = []
@@ -34,11 +38,13 @@ def grad_check_sparse(
             index = tuple(rng.randrange(size) for size in x.shape)
             old_value = x[index].item()
 
-            x[index] = old_value + h
-            loss_plus = f(x).item()
-            x[index] = old_value - h
-            loss_minus = f(x).item()
-            x[index] = old_value
+            try:
+                x[index] = old_value + h
+                loss_plus = f(x).item()
+                x[index] = old_value - h
+                loss_minus = f(x).item()
+            finally:
+                x[index] = old_value
 
             numerical = (loss_plus - loss_minus) / (2.0 * h)
             analytic = analytic_grad[index].item()
@@ -49,4 +55,3 @@ def grad_check_sparse(
                 f"analytic={analytic:+.7e} relative_error={error:.3e}"
             )
     return errors
-

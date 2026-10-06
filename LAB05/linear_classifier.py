@@ -1,7 +1,8 @@
-"""Completed Lab 05: vectorized multiclass SVM loss and manual gradient."""
+"""Multiclass SVM loss, manual gradient, and minibatch SGD."""
 
 from __future__ import annotations
 
+import math
 from typing import Callable, List, Tuple
 
 import torch
@@ -11,6 +12,31 @@ LossFunction = Callable[
     [torch.Tensor, torch.Tensor, torch.Tensor, float],
     Tuple[torch.Tensor, torch.Tensor],
 ]
+
+
+def _check_batch(X: torch.Tensor, y: torch.Tensor) -> None:
+    if X.ndim != 2 or y.ndim != 1 or X.shape[0] != y.shape[0]:
+        raise ValueError("Expected X=(N,D) and y=(N,) with matching N")
+    if X.shape[0] == 0:
+        raise ValueError("The minibatch must contain at least one example")
+    if not X.is_floating_point() or y.dtype != torch.int64:
+        raise ValueError("X must be floating point and y must be int64")
+    if X.device != y.device:
+        raise ValueError("X and y must be on the same device")
+    if torch.any(y < 0):
+        raise ValueError("Class labels must be nonnegative")
+
+
+def _check_svm_inputs(W, X, y, reg) -> None:
+    _check_batch(X, y)
+    if W.ndim != 2 or X.shape[1] != W.shape[0] or W.shape[1] == 0:
+        raise ValueError("Expected W=(D,C) with C > 0")
+    if W.dtype != X.dtype or W.device != X.device:
+        raise ValueError("W and X must have the same dtype and device")
+    if torch.any(y >= W.shape[1]):
+        raise ValueError("Class labels must be smaller than C")
+    if not math.isfinite(reg) or reg < 0:
+        raise ValueError("reg must be finite and nonnegative")
 
 
 def linear_scores(
@@ -26,8 +52,6 @@ def linear_scores(
     if b is not None and b.shape != (W.shape[1],):
         raise ValueError("b must have shape (number_of_classes,)")
 
-    # For 2-D PyTorch tensors, ``X @ W`` is equivalent to
-    # ``torch.matmul(X, W)``. Both perform matrix multiplication.
     scores = X @ W
     if b is not None:
         scores = scores + b
@@ -41,16 +65,10 @@ def svm_loss_naive(
     reg: float = 0.0,
     delta: float = 1.0,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
-    """Compute the regularized multiclass SVM loss with explicit loops.
-
-    This completed reference is supplied so Lab 05 can focus on vectorization.
-    It uses ``mean(data_loss) + reg * sum(W * W)``; the course convention does
-    not include a factor of one half in the regularization loss.
-    """
-    if X.ndim != 2 or W.ndim != 2 or y.ndim != 1:
-        raise ValueError("Expected X=(N,D), W=(D,C), and y=(N,)")
-    if X.shape[0] != y.shape[0] or X.shape[1] != W.shape[0]:
-        raise ValueError("Input shapes are incompatible")
+    """Loop reference: mean hinge loss + reg * sum(W**2)."""
+    _check_svm_inputs(W, X, y, reg)
+    if not math.isfinite(delta) or delta < 0:
+        raise ValueError("delta must be finite and nonnegative")
 
     num_train = X.shape[0]
     num_classes = W.shape[1]
@@ -80,18 +98,8 @@ def svm_loss_vectorized(
     y: torch.Tensor,
     reg: float = 0.0,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
-    """Compute multiclass SVM loss and gradient without Python loops.
-
-    Use the objective ``mean(data_loss) + reg * sum(W * W)``.
-    Do not call ``svm_loss_naive`` from this function.
-    You may use either ``A @ B`` or ``torch.matmul(A, B)`` for matrix products.
-    """
-    if X.ndim != 2 or W.ndim != 2 or y.ndim != 1:
-        raise ValueError("Expected X=(N,D), W=(D,C), and y=(N,)")
-    if X.shape[0] != y.shape[0] or X.shape[1] != W.shape[0]:
-        raise ValueError("Input shapes are incompatible")
-    if X.shape[0] == 0:
-        raise ValueError("The minibatch must contain at least one example")
+    """Vectorized hinge loss (margin 1) and its manual gradient."""
+    _check_svm_inputs(W, X, y, reg)
 
     num_train = X.shape[0]
     rows = torch.arange(num_train, device=X.device)
@@ -117,8 +125,7 @@ def sample_batch(
     generator: torch.Generator | None = None,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     """Sample a minibatch with replacement from ``X`` and ``y``."""
-    if X.shape[0] != y.shape[0]:
-        raise ValueError("X and y must contain the same number of examples")
+    _check_batch(X, y)
     if batch_size <= 0:
         raise ValueError("batch_size must be positive")
 
@@ -142,12 +149,15 @@ def train_linear_classifier(
     W: torch.Tensor | None = None,
     seed: int = 0,
 ) -> Tuple[torch.Tensor, List[float]]:
-    """Train a linear classifier with minibatch stochastic gradient descent."""
-    if X.ndim != 2 or y.ndim != 1:
-        raise ValueError("Expected X=(N,D) and y=(N,)")
+    """Run manual SGD, copying any supplied initial weights."""
+    _check_batch(X, y)
+    if not math.isfinite(learning_rate) or learning_rate <= 0:
+        raise ValueError("learning_rate must be finite and positive")
+    if num_iters < 0 or batch_size <= 0:
+        raise ValueError("num_iters must be nonnegative and batch_size positive")
+    generator = torch.Generator(device=X.device).manual_seed(seed)
     if W is None:
         num_classes = int(y.max().item()) + 1
-        generator = torch.Generator(device=X.device).manual_seed(seed)
         W = 1e-3 * torch.randn(
             X.shape[1],
             num_classes,
@@ -156,15 +166,17 @@ def train_linear_classifier(
             generator=generator,
         )
     else:
-        generator = torch.Generator(device=X.device).manual_seed(seed)
+        W = W.detach().clone()
+    _check_svm_inputs(W, X, y, reg)
 
     loss_history: List[float] = []
-    for _ in range(num_iters):
-        X_batch, y_batch = sample_batch(X, y, batch_size, generator)
-        loss, gradient = loss_func(W, X_batch, y_batch, reg)
-        loss_history.append(float(loss))
+    with torch.no_grad():
+        for _ in range(num_iters):
+            X_batch, y_batch = sample_batch(X, y, batch_size, generator)
+            loss, gradient = loss_func(W, X_batch, y_batch, reg)
+            loss_history.append(loss.item())
 
-        W -= learning_rate * gradient
+            W -= learning_rate * gradient
 
     return W, loss_history
 
@@ -178,4 +190,6 @@ def accuracy(y_pred: torch.Tensor, y_true: torch.Tensor) -> float:
     """Return classification accuracy in the range [0, 1]."""
     if y_pred.shape != y_true.shape:
         raise ValueError("Prediction and target shapes must match")
+    if y_true.numel() == 0:
+        raise ValueError("Accuracy requires at least one target")
     return float((y_pred == y_true).to(torch.float64).mean())
